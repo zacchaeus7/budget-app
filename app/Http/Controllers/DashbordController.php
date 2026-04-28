@@ -60,6 +60,7 @@ class DashbordController extends Controller
                 'id' => $transaction->id,
                 'type' => $transaction->type,
                 'amount' => (float) $transaction->amount,
+                'reference' => $transaction->reference,
                 'description' => $transaction->description,
                 'transaction_date' => $transaction->transaction_date?->toDateTimeString(),
                 'account' => $transaction->account ? [
@@ -72,6 +73,10 @@ class DashbordController extends Controller
                     'type' => $transaction->category->type,
                 ] : null,
             ]);
+
+        $unreadNotificationsCount = $user->notifications()
+            ->whereNull('read_at')
+            ->count();
 
         return response()->json([
             'period' => [
@@ -87,6 +92,7 @@ class DashbordController extends Controller
                 'total_expense' => $totalExpense,
                 'total_income' => $totalIncome,
                 'total_operations' => $totalOperations,
+                'unread_notifications_count' => $unreadNotificationsCount,
                 'recent_activities' => $recentActivities,
             ],
         ]);

@@ -6,6 +6,7 @@ use App\Models\Budgets;
 use App\Models\Transaction;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
@@ -22,7 +23,7 @@ class ReportController extends Controller
         $endOfMonth = $startOfMonth->copy()->endOfMonth();
 
         $transactionsQuery = Transaction::query()
-            ->where('user_id', $user->id)
+            // ->where('user_id', $user->id)
             ->whereBetween('transaction_date', [$startOfMonth, $endOfMonth]);
 
         $totalDepenses = (float) (clone $transactionsQuery)
@@ -33,11 +34,27 @@ class ReportController extends Controller
             ->where('type', 'income')
             ->sum('amount');
 
+        $totalOperations = (clone $transactionsQuery)->count();
+
         $budgetInitial = (float) Budgets::query()
-            ->where('user_id', $user->id)
+            // ->where('user_id', $user->id)
             ->whereDate('start_date', '<=', $endOfMonth)
             ->whereDate('end_date', '>=', $startOfMonth)
             ->sum('amount');
+
+        $topExpenseCategory = Transaction::query()
+            ->join('categories', 'categories.id', '=', 'transactions.category_id')
+            // ->where('transactions.user_id', $user->id)
+            ->where('transactions.type', 'expense')
+            ->whereBetween('transactions.transaction_date', [$startOfMonth, $endOfMonth])
+            ->groupBy('transactions.category_id', 'categories.name')
+            ->select(
+                'transactions.category_id',
+                'categories.name',
+                DB::raw('SUM(transactions.amount) as total_amount')
+            )
+            ->orderByDesc('total_amount')
+            ->first();
 
         $soldeFinal = $totalEntrees - $totalDepenses;
         $soldeProjeteCloture = $budgetInitial + $soldeFinal;
@@ -54,7 +71,13 @@ class ReportController extends Controller
                 'budget_initial' => $budgetInitial,
                 'total_depenses' => $totalDepenses,
                 'total_entrees' => $totalEntrees,
+                'total_operations' => $totalOperations,
                 'solde_final' => $soldeFinal,
+                'top_expense_category' => $topExpenseCategory ? [
+                    'category_id' => $topExpenseCategory->category_id,
+                    'name' => $topExpenseCategory->name,
+                    'total_amount' => (float) $topExpenseCategory->total_amount,
+                ] : null,
             ],
         ]);
     }

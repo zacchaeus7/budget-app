@@ -17,11 +17,13 @@ class Notification extends Model
         'scheduled_slot',
         'message',
         'is_sent',
+        'read_at',
         'sent_at',
     ];
 
     protected $casts = [
         'is_sent' => 'boolean',
+        'read_at' => 'datetime',
         'sent_at' => 'datetime',
     ];
 

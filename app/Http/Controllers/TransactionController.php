@@ -196,7 +196,7 @@ class TransactionController extends Controller
         $category = $this->findOwnedCategory($user->id, $data['category_id']);
         // $this->ensureCategoryMatchesType($category, $data['type']);
 
-        $transaction = DB::transaction(function () use ($data, $user, $account) {
+        $transaction = DB::transaction(function () use ($data, $user, $account, $category) {
             $transaction = Transaction::create([
                 ...$data,
                 'user_id' => $user->id,
@@ -204,6 +204,7 @@ class TransactionController extends Controller
 
             $this->applyAccountImpact($account, $transaction->type, (float) $transaction->amount);
             $this->syncBudgetAlertsForCategoryAndDate($transaction->user_id, $transaction->category_id, $transaction->transaction_date);
+            $this->createTransactionNotification($transaction, $account, $category, 'created');
 
             return $transaction;
         });
@@ -235,13 +236,14 @@ class TransactionController extends Controller
         $newCategory = $this->findOwnedCategory($user->id, $data['category_id']);
         $this->ensureCategoryMatchesType($newCategory, $data['type']);
 
-        DB::transaction(function () use ($transaction, $data, $oldAccount, $newAccount) {
+        DB::transaction(function () use ($transaction, $data, $oldAccount, $newAccount, $newCategory) {
             $this->revertAccountImpact($oldAccount, $transaction->type, (float) $transaction->amount);
 
             $transaction->update($data);
 
             $this->applyAccountImpact($newAccount, $transaction->type, (float) $transaction->amount);
             $this->syncBudgetAlertsForCategoryAndDate($transaction->user_id, $transaction->category_id, $transaction->transaction_date);
+            $this->createTransactionNotification($transaction->fresh(), $newAccount, $newCategory, 'updated');
         });
 
         $this->syncBudgetAlertsForCategoryAndDate($transaction->user_id, $oldCategoryId, $oldDate);
@@ -255,9 +257,11 @@ class TransactionController extends Controller
 
         $categoryId = $transaction->category_id;
         $transactionDate = $transaction->transaction_date;
+        $transactionSnapshot = $transaction->loadMissing(['account', 'category']);
 
-        DB::transaction(function () use ($transaction) {
+        DB::transaction(function () use ($transaction, $transactionSnapshot) {
             $this->revertAccountImpact($transaction->account, $transaction->type, (float) $transaction->amount);
+            $this->createTransactionNotification($transactionSnapshot, $transactionSnapshot->account, $transactionSnapshot->category, 'deleted');
             $transaction->delete();
         });
 
@@ -350,5 +354,34 @@ class TransactionController extends Controller
                 }
             }
         }
+    }
+
+    private function createTransactionNotification(
+        Transaction $transaction,
+        ?Account $account,
+        ?Category $category,
+        string $action
+    ): void {
+        $movementLabel = $transaction->type === 'income' ? 'entree' : 'sortie';
+        $actionLabel = match ($action) {
+            'created' => 'enregistree',
+            'updated' => 'mise a jour',
+            'deleted' => 'supprimee',
+            default => 'traitee',
+        };
+
+        $accountName = $account?->name ?? 'Compte inconnu';
+        $categoryName = $category?->name ?? 'Sans categorie';
+        $amount = number_format((float) $transaction->amount, 2, '.', ' ');
+        $reference = $transaction->reference ? " [ref: {$transaction->reference}]" : '';
+        $description = $transaction->description ? " ({$transaction->description})" : '';
+
+        Notification::create([
+            'user_id' => $transaction->user_id,
+            'account_id' => $account?->id,
+            'type' => 'email',
+            'message' => "Une {$movementLabel} de {$amount} a ete {$actionLabel} sur le compte {$accountName} dans la categorie {$categoryName}{$reference}{$description}.",
+            'is_sent' => false,
+        ]);
     }
 }

@@ -32,6 +32,8 @@ Route::middleware('auth:api')->group(function () {
     Route::apiResource('budgets', BudgetsController::class);
     Route::apiResource('budgets-alerts', BudgetsAlertController::class)
         ->parameters(['budgets-alerts' => 'budgetsAlert']);
+    Route::post('notifications/mark-all-as-read', [NotificationController::class, 'markAllAsRead']);
+    Route::post('notifications/{notification}/mark-as-read', [NotificationController::class, 'markAsRead']);
     Route::apiResource('notifications', NotificationController::class);
 
     Route::get('/user', function (Request $request) {

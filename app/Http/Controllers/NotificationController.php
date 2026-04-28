@@ -9,9 +9,18 @@ class NotificationController extends Controller
 {
     public function index(Request $request)
     {
-        return response()->json(
-            $request->user()->notifications()->latest()->get()
-        );
+        $notificationsQuery = $request->user()->notifications()->latest();
+
+        if (! $request->boolean('include_read', false)) {
+            $notificationsQuery->whereNull('read_at');
+        }
+
+        return response()->json([
+            'notifications' => $notificationsQuery->get()->map(
+                fn (Notification $notification) => $this->formatNotification($notification)
+            ),
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
     }
 
     public function store(Request $request)
@@ -27,14 +36,21 @@ class NotificationController extends Controller
             'is_sent' => $data['is_sent'] ?? false,
         ]);
 
-        return response()->json($notification, 201);
+        return response()->json([
+            'message' => 'Notification creee avec succes.',
+            'notification' => $this->formatNotification($notification),
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ], 201);
     }
 
     public function show(Request $request, Notification $notification)
     {
         abort_unless($notification->user_id === $request->user()->id, 404);
 
-        return response()->json($notification);
+        return response()->json([
+            'notification' => $this->formatNotification($notification),
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
     }
 
     public function update(Request $request, Notification $notification)
@@ -49,7 +65,11 @@ class NotificationController extends Controller
 
         $notification->update($data);
 
-        return response()->json($notification->fresh());
+        return response()->json([
+            'message' => 'Notification mise a jour avec succes.',
+            'notification' => $this->formatNotification($notification->fresh()),
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
     }
 
     public function destroy(Request $request, Notification $notification)
@@ -58,6 +78,60 @@ class NotificationController extends Controller
 
         $notification->delete();
 
-        return response()->json(['message' => 'Notification supprimee avec succes.']);
+        return response()->json([
+            'message' => 'Notification supprimee avec succes.',
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
+    }
+
+    public function markAsRead(Request $request, Notification $notification)
+    {
+        abort_unless($notification->user_id === $request->user()->id, 404);
+
+        if ($notification->read_at === null) {
+            $notification->update([
+                'read_at' => now(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Notification marquee comme lue avec succes.',
+            'notification' => $this->formatNotification($notification->fresh()),
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
+    }
+
+    public function markAllAsRead(Request $request)
+    {
+        $updatedCount = $request->user()
+            ->notifications()
+            ->whereNull('read_at')
+            ->update([
+                'read_at' => now(),
+            ]);
+
+        return response()->json([
+            'message' => 'Toutes les notifications ont ete marquees comme lues avec succes.',
+            'updated_count' => $updatedCount,
+            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+        ]);
+    }
+
+    private function formatNotification(Notification $notification): array
+    {
+        return [
+            'id' => $notification->id,
+            'user_id' => $notification->user_id,
+            'account_id' => $notification->account_id,
+            'type' => $notification->type,
+            'scheduled_slot' => $notification->scheduled_slot,
+            'message' => $notification->message,
+            'is_sent' => (bool) $notification->is_sent,
+            'is_read' => $notification->read_at !== null,
+            'read_at' => $notification->read_at?->toDateTimeString(),
+            'sent_at' => $notification->sent_at?->toDateTimeString(),
+            'created_at' => $notification->created_at?->toDateTimeString(),
+            'updated_at' => $notification->updated_at?->toDateTimeString(),
+        ];
     }
 }
