@@ -9,17 +9,27 @@ class NotificationController extends Controller
 {
     public function index(Request $request)
     {
-        $notificationsQuery = $request->user()->notifications()->latest();
+        $notificationsQuery = $this->notificationsQuery($request)->latest();
 
         if (! $request->boolean('include_read', false)) {
-            $notificationsQuery->whereNull('read_at');
+            $currentSlot = now()->format('Y-m');
+
+            $notificationsQuery->where(function ($query) use ($currentSlot) {
+                $query->where(function ($query) {
+                    $query->whereNull('read_at')
+                        ->where('type', '!=', 'budget_alert');
+                })->orWhere(function ($query) use ($currentSlot) {
+                    $query->where('type', 'budget_alert')
+                        ->where('scheduled_slot', $currentSlot);
+                });
+            });
         }
 
         return response()->json([
             'notifications' => $notificationsQuery->get()->map(
                 fn (Notification $notification) => $this->formatNotification($notification)
             ),
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
     }
 
@@ -39,17 +49,17 @@ class NotificationController extends Controller
         return response()->json([
             'message' => 'Notification creee avec succes.',
             'notification' => $this->formatNotification($notification),
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ], 201);
     }
 
     public function show(Request $request, Notification $notification)
     {
-        abort_unless($notification->user_id === $request->user()->id, 404);
+        abort_unless($this->canAccessNotification($request, $notification), 404);
 
         return response()->json([
             'notification' => $this->formatNotification($notification),
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
     }
 
@@ -68,7 +78,7 @@ class NotificationController extends Controller
         return response()->json([
             'message' => 'Notification mise a jour avec succes.',
             'notification' => $this->formatNotification($notification->fresh()),
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
     }
 
@@ -80,13 +90,13 @@ class NotificationController extends Controller
 
         return response()->json([
             'message' => 'Notification supprimee avec succes.',
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
     }
 
     public function markAsRead(Request $request, Notification $notification)
     {
-        abort_unless($notification->user_id === $request->user()->id, 404);
+        abort_unless($this->canAccessNotification($request, $notification), 404);
 
         if ($notification->read_at === null) {
             $notification->update([
@@ -97,14 +107,13 @@ class NotificationController extends Controller
         return response()->json([
             'message' => 'Notification marquee comme lue avec succes.',
             'notification' => $this->formatNotification($notification->fresh()),
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
     }
 
     public function markAllAsRead(Request $request)
     {
-        $updatedCount = $request->user()
-            ->notifications()
+        $updatedCount = $this->notificationsQuery($request)
             ->whereNull('read_at')
             ->update([
                 'read_at' => now(),
@@ -113,8 +122,30 @@ class NotificationController extends Controller
         return response()->json([
             'message' => 'Toutes les notifications ont ete marquees comme lues avec succes.',
             'updated_count' => $updatedCount,
-            'unread_count' => $request->user()->notifications()->whereNull('read_at')->count(),
+            'unread_count' => $this->unreadNotificationsCount($request),
         ]);
+    }
+
+    private function notificationsQuery(Request $request)
+    {
+        if ($request->user()->role === 'admin') {
+            return Notification::query();
+        }
+
+        return $request->user()->notifications();
+    }
+
+    private function unreadNotificationsCount(Request $request): int
+    {
+        return $this->notificationsQuery($request)
+            ->whereNull('read_at')
+            ->count();
+    }
+
+    private function canAccessNotification(Request $request, Notification $notification): bool
+    {
+        return $request->user()->role === 'admin'
+            || $notification->user_id === $request->user()->id;
     }
 
     private function formatNotification(Notification $notification): array

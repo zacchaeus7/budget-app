@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Account;
 use App\Models\Budgets;
+use App\Models\Notification;
 use App\Models\Transaction;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -74,7 +75,9 @@ class DashbordController extends Controller
                 ] : null,
             ]);
 
-        $unreadNotificationsCount = $user->notifications()
+        $unreadNotificationsCount = ($user->role === 'admin'
+            ? Notification::query()
+            : $user->notifications())
             ->whereNull('read_at')
             ->count();
 

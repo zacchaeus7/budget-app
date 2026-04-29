@@ -16,6 +16,7 @@ class User extends Authenticatable implements JWTSubject
     protected $fillable = [
         'name',
         'email',
+        'role',
         'whatsapp_number',
         'password',
     ];
@@ -63,5 +64,15 @@ class User extends Authenticatable implements JWTSubject
     public function notifications(): HasMany
     {
         return $this->hasMany(Notification::class);
+    }
+
+    public function sentMessages(): HasMany
+    {
+        return $this->hasMany(Message::class, 'admin_id');
+    }
+
+    public function receivedMessages(): HasMany
+    {
+        return $this->hasMany(Message::class);
     }
 }

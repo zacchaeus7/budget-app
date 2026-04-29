@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Budgets;
+use App\Models\Message;
+use App\Models\Notification;
 use App\Models\Transaction;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -36,11 +38,101 @@ class ReportController extends Controller
 
         $totalOperations = (clone $transactionsQuery)->count();
 
+        $consommationsUtilisateurs = Transaction::query()
+            ->join('users', 'users.id', '=', 'transactions.user_id')
+            ->where('transactions.type', 'expense')
+            ->whereBetween('transactions.transaction_date', [$startOfMonth, $endOfMonth])
+            ->groupBy('transactions.user_id', 'users.name', 'users.email')
+            ->select(
+                'transactions.user_id',
+                'users.name',
+                'users.email',
+                DB::raw('SUM(transactions.amount) as total_consumed')
+            )
+            ->orderByDesc('total_consumed')
+            ->get()
+            ->map(fn ($consommation) => [
+                'user_id' => $consommation->user_id,
+                'name' => $consommation->name,
+                'email' => $consommation->email,
+                'total_consumed' => (float) $consommation->total_consumed,
+            ]);
+
+        $utilisateurPlusGrandConsommateur = $consommationsUtilisateurs->first();
+        $targetUserId = $request->filled('user_id')
+            ? $request->integer('user_id')
+            : ($user?->role === 'admin'
+                ? $utilisateurPlusGrandConsommateur['user_id'] ?? null
+                : $user?->id);
+
+        $utilisateurTotalConsomme = $targetUserId
+            ? $consommationsUtilisateurs->firstWhere('user_id', $targetUserId)
+            : null;
+
+        $totalConsommeUtilisateur = (float) ($utilisateurTotalConsomme['total_consumed'] ?? 0);
+
         $budgetInitial = (float) Budgets::query()
             // ->where('user_id', $user->id)
             ->whereDate('start_date', '<=', $endOfMonth)
             ->whereDate('end_date', '>=', $startOfMonth)
             ->sum('amount');
+
+        $messagesBudget = collect();
+
+        if ($user && $user->role === 'admin' && $budgetInitial > 0) {
+            $messagesBudget = $consommationsUtilisateurs
+                ->map(function ($consommation) use ($user, $month, $year, $budgetInitial) {
+                    $consumedPercentage = round(($consommation['total_consumed'] / $budgetInitial) * 100, 2);
+
+                    if ($consumedPercentage <= 25) {
+                        return null;
+                    }
+
+                    $message = Message::updateOrCreate(
+                        [
+                            'admin_id' => $user->id,
+                            'user_id' => $consommation['user_id'],
+                            'month' => $month,
+                            'year' => $year,
+                        ],
+                        [
+                            'monthly_budget_amount' => $budgetInitial,
+                            'consumed_amount' => $consommation['total_consumed'],
+                            'consumed_percentage' => $consumedPercentage,
+                            'message' => 'Vous avez consomme plus de 25% du budget mensuel.',
+                        ]
+                    );
+
+                    Notification::firstOrCreate(
+                        [
+                            'user_id' => $consommation['user_id'],
+                            'type' => 'budget_alert',
+                            'scheduled_slot' => sprintf('%04d-%02d', $year, $month),
+                            'message' => $message->message,
+                        ],
+                        [
+                            'is_sent' => false,
+                        ]
+                    );
+
+                    return $message;
+                })
+                ->filter()
+                ->values()
+                ->map(fn (Message $message) => [
+                    'id' => $message->id,
+                    'admin_id' => $message->admin_id,
+                    'user_id' => $message->user_id,
+                    'month' => $message->month,
+                    'year' => $message->year,
+                    'monthly_budget_amount' => (float) $message->monthly_budget_amount,
+                    'consumed_amount' => (float) $message->consumed_amount,
+                    'consumed_percentage' => (float) $message->consumed_percentage,
+                    'message' => $message->message,
+                    'sent_at' => $message->sent_at,
+                    'read_at' => $message->read_at,
+                ]);
+        }
 
         $topExpenseCategory = Transaction::query()
             ->join('categories', 'categories.id', '=', 'transactions.category_id')
@@ -72,6 +164,11 @@ class ReportController extends Controller
                 'total_depenses' => $totalDepenses,
                 'total_entrees' => $totalEntrees,
                 'total_operations' => $totalOperations,
+                'total_consomme_utilisateur' => $totalConsommeUtilisateur,
+                'utilisateur_total_consomme' => $utilisateurTotalConsomme,
+                'consommations_utilisateurs' => $consommationsUtilisateurs,
+                'utilisateur_plus_grand_consommateur' => $utilisateurPlusGrandConsommateur,
+                'messages_budget' => $messagesBudget,
                 'solde_final' => $soldeFinal,
                 'top_expense_category' => $topExpenseCategory ? [
                     'category_id' => $topExpenseCategory->category_id,
